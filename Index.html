@@ -1,0 +1,212 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>GTA ClipMaster</title>
+<style>
+*{box-sizing:border-box}
+body{
+ margin:0;background:#090d18;color:white;
+ font-family:Arial,sans-serif;
+}
+header{
+ padding:22px 18px;background:#11182a;
+ border-bottom:1px solid #27324a;
+}
+.logo{font-size:25px;font-weight:bold;color:#a78bfa}
+.logo span{color:#38bdf8}
+header p{color:#9ca3af;font-size:12px}
+main{max-width:750px;margin:auto;padding:18px}
+.card{
+ background:#151e31;border:1px solid #293650;
+ border-radius:15px;padding:18px;margin-bottom:17px;
+}
+h2{font-size:18px;margin-top:0}
+input,button{
+ width:100%;padding:13px;border-radius:9px;margin-top:10px;
+}
+input{background:#0b1220;border:1px solid #374151;color:white}
+button{
+ border:0;background:#7c3aed;color:white;
+ font-weight:bold;font-size:15px;cursor:pointer;
+}
+button:disabled{opacity:.5}
+video{
+ width:100%;max-height:400px;background:black;
+ border-radius:10px;margin-top:12px;
+}
+label{display:block;margin-top:12px;color:#cbd5e1}
+small{color:#9ca3af}
+#status{color:#38bdf8;line-height:1.6}
+#download{display:none;background:#059669}
+footer{text-align:center;color:#64748b;padding:20px}
+</style>
+</head>
+<body>
+
+<header>
+ <div class="logo">GTA <span>ClipMaster</span></div>
+ <p>YOUR AI GAMING CLIP STUDIO</p>
+</header>
+
+<main>
+<div class="card">
+ <h2>🎮 Upload Gameplay</h2>
+ <input type="file" id="file" accept="video/*">
+ <small>Choose a gameplay video from your phone.</small>
+ <video id="preview" controls playsinline></video>
+</div>
+
+<div class="card">
+ <h2>✂️ Create Your Clip</h2>
+ <label>Start time (seconds)</label>
+ <input type="number" id="start" value="0" min="0">
+ <label>Clip duration (seconds)</label>
+ <input type="number" id="duration" value="30" min="1">
+
+ <label>Video format</label>
+ <select id="format" style="width:100%;padding:12px;margin-top:10px;background:#0b1220;color:white;border-radius:8px">
+ <option value="original">Original format</option>
+ <option value="vertical">Vertical 9:16 (Reels/Shorts)</option>
+ </select>
+
+ <button id="create" disabled>Create My Clip</button>
+ <p id="status">Upload a video to begin.</p>
+</div>
+
+<div class="card">
+ <h2>📥 Your Finished Clip</h2>
+ <video id="result" controls playsinline></video>
+ <button id="download">Download Clip</button>
+</div>
+</main>
+
+<footer>GTA ClipMaster • Free Starter Studio</footer>
+
+<script type="module">
+import { FFmpeg } from
+'https://cdn.jsdelivr.net/npm/@ffmpeg/ffmpeg@0.12.10/dist/esm/index.js';
+
+import { fetchFile, toBlobURL } from
+'https://cdn.jsdelivr.net/npm/@ffmpeg/util@0.12.1/dist/esm/index.js';
+
+const fileInput=document.getElementById('file');
+const preview=document.getElementById('preview');
+const result=document.getElementById('result');
+const create=document.getElementById('create');
+const status=document.getElementById('status');
+const download=document.getElementById('download');
+
+let ffmpeg;
+let videoFile;
+let resultURL;
+
+fileInput.addEventListener('change',()=>{
+ videoFile=fileInput.files[0];
+ if(!videoFile)return;
+
+ if(videoFile.size>100*1024*1024){
+  status.textContent='Large video selected. Processing may exceed your phone memory.';
+ }
+
+ preview.src=URL.createObjectURL(videoFile);
+ create.disabled=false;
+});
+
+async function loadEngine(){
+ if(ffmpeg)return;
+ status.textContent='Loading video engine...';
+ ffmpeg=new FFmpeg();
+
+ ffmpeg.on('progress',({progress})=>{
+  status.textContent='Processing clip: '+Math.round(progress*100)+'%';
+ });
+
+ const base='https://cdn.jsdelivr.net/npm/@ffmpeg/core@0.12.6/dist/umd';
+
+ await ffmpeg.load({
+  coreURL:await toBlobURL(base+'/ffmpeg-core.js','text/javascript'),
+  wasmURL:await toBlobURL(base+'/ffmpeg-core.wasm','application/wasm')
+ });
+}
+
+create.addEventListener('click',async()=>{
+ if(!videoFile)return;
+
+ const start=Number(document.getElementById('start').value);
+ const duration=Number(document.getElementById('duration').value);
+ const vertical=document.getElementById('format').value==='vertical';
+
+ if(!Number.isFinite(start)||!Number.isFinite(duration)||start<0||duration<=0){
+  status.textContent='Enter valid start time and duration.';
+  return;
+ }
+
+ if(start+duration>preview.duration){
+  status.textContent='Clip exceeds video duration.';
+  return;
+ }
+
+ create.disabled=true;
+ download.style.display='none';
+
+ try{
+  await loadEngine();
+  status.textContent='Preparing your gameplay...';
+
+  const ext=videoFile.name.split('.').pop().replace(/[^a-z0-9]/gi,'');
+  const input='input.'+(ext||'mp4');
+
+  await ffmpeg.writeFile(input,await fetchFile(videoFile));
+
+  const filters=vertical
+   ?'scale=720:1280:force_original_aspect_ratio=increase,crop=720:1280'
+   :'scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2';
+
+  status.textContent='Creating your clip...';
+
+  await ffmpeg.exec([
+   '-ss',String(start),'-i',input,
+   '-t',String(duration),
+   '-vf',filters,
+   '-c:v','libx264',
+   '-preset','ultrafast',
+   '-crf','28',
+   '-c:a','aac',
+   '-b:a','128k',
+   '-movflags','+faststart',
+   'clip.mp4'
+  ]);
+
+  const data=await ffmpeg.readFile('clip.mp4');
+
+  if(resultURL)URL.revokeObjectURL(resultURL);
+
+  resultURL=URL.createObjectURL(
+   new Blob([data.buffer],{type:'video/mp4'})
+  );
+
+  result.src=resultURL;
+  download.style.display='block';
+
+  download.onclick=()=>{
+   const a=document.createElement('a');
+   a.href=resultURL;
+   a.download='GTA-ClipMaster.mp4';
+   a.click();
+  };
+
+  status.textContent='Your clip is ready! 🎉';
+
+ }catch(error){
+  console.error(error);
+  status.textContent='Processing failed. Try a smaller video or another browser.';
+ }finally{
+  create.disabled=false;
+ }
+});
+</script>
+</body>
+</html>
